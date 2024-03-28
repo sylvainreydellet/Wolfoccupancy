@@ -1,0 +1,127 @@
+---
+title: "Occupancy Model"
+format: html
+editor: visual
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+Installation des packages nécéssaires
+
+```{r}
+setwd("/Volumes/T7/travail/X-3A/stage LECA/R/donnees R")
+library(readxl)
+library(stringr)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(visreg)
+library(visdat)
+library(naniar)
+library(lattice)
+library(caret)
+library(gtools)
+library(unmarked)
+```
+
+Lecture des fichiers et préparation pour créer la base de données.
+
+```{r}
+rm(list=ls(all=TRUE))
+
+temp = list.files(pattern="\\.xlsx$")
+myfiles = lapply(temp, read_xlsx)
+mydim = data.frame(t(data.frame(lapply(myfiles, dim))))## la dimension de chaque fichier
+colnames(mydim)<-c("nbli","nbco")
+
+titi<-gsub('.xlsx', '', temp)
+titi2<-gsub('S1_', '', titi)
+titi3<-substring(titi2,1,3)# les mailles telles que donnees dans le nom de fichier
+mydim$maille<-titi2
+mydim$proto<-titi3
+rownames(mydim)<-titi2
+head(mydim)
+
+```
+
+Création du fichier de base 'd'.
+
+```{r}
+d<-data.frame(data.table::rbindlist(myfiles)) ## le fichier aggregant tous les fichiers
+d$maille_new<-rep(mydim$maille,mydim$nbli) ## on refait une colonne maille a partir du nom de fichier
+head(d)
+str(d)
+summary(d)
+
+d$predictionbase<-as.factor(d$predictionbase)
+d$prediction<-as.factor(d$prediction)
+d$correction<-as.factor(d$correction)
+d$humanpresence<-as.factor(d$humanpresence)
+d$video<-as.factor(d$video)
+d$session<-as.factor(d$session)
+d$protocole<-as.factor(d$protocole)
+d$maille_new<-as.factor(d$maille_new)
+d$structure<-as.factor(d$structure)
+d$score[d$score=="NA"]<-NA
+d$score<-as.numeric(d$score)
+d$scorebase[d$scorebase=="NA"]<-NA
+d$scorebase<-as.numeric(d$scorebase)
+d$nombre[d$nombre=="NI"]<-NA
+d$nombre[d$nombre=="NA"]<-NA
+d$nombre<-as.numeric(d$nombre)
+d$count[d$count=="NA"]<-NA
+d$count<-as.numeric(d$count)
+d$dateshort<-substring(d$date,1,10)
+d$dateseq<-as.factor(paste(d$dateshort,d$seqnum,sep=":"))
+
+summary(d)
+
+d$prediction[d$prediction=="NA"]<-NA
+d$prediction[d$prediction=="vide"]<-NA
+d$prediction<-droplevels(d$prediction)
+d$prediction<-as.character(d$prediction)
+d$prediction[d$prediction=="chevre"]<-"goat"
+d$prediction[d$prediction=="indefini"]<-NA
+d$prediction[d$prediction=="indéfini"]<-NA
+d$prediction<-as.factor(d$prediction)
+
+d$esp<-substring(d$prediction,1,4)
+table(d$esp,d$predictionbase)
+```
+
+A partir du fichier d, on peut créer 'g', avec une seule ligne par séquence.
+
+```{r}
+
+g<-unique(d[,c("seqnum","score","prediction","session","maille_new","dateseq","dateshort","correction")])
+g<-droplevels(g[g$score>0.5&is.na(g$score)==F,]) # on enleve les lignes avec des scores <0.7
+
+#extraire les noms des mailles
+names(g)[names(g) == "maille_new"] <- "site"
+dates <- as.Date(g$dateshort,"%Y:%m:%d")
+dates=na.omit(dates)
+semaines <- cut(dates, breaks="week", labels=FALSE)# Découper les dates en semaines
+semaine <- factor(semaines, levels=unique(semaines), labels=unique(semaines)) # Convertir les semaines en facteurs ordonnés avec des étiquettes uniques pour chaque niveau
+g<-cbind(semaine,g)
+g <- g[, !(names(g) %in% c("dateseq", "dateshort","filename","seqnum"))]
+summary(g)
+```
+
+On peut maintenant créer notre base de données pour chaque epèce. L'objetif est d'avoir une table site/semaine avec des 1 si l'éspèce a été observée, et 0 sinon.
+
+```{r}
+#On s'interesse au loup: création matrice site x semaine du relevé, remplie de 1 (présence) 0 (absence)
+Det_loup <- subset(g,  correction=="loup" | (prediction == "loup" & is.na(correction)))
+table<-table(Det_loup$site,Det_loup$semaine)
+
+noms_col_numeriques <- as.numeric(colnames(table))
+noms_col_tries <- sort(noms_col_numeriques)
+noms_col_tries <- as.character(noms_col_tries)
+table <- table[,noms_col_tries ]
+table <- ifelse(table > 1, 1, table) #on remplace les rares 2 ou 3 par des 1: présence/absence.
+```
